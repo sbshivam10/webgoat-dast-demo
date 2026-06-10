@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 75
 
     env:
+      POLARIS_ACCESS_TOKEN: ${{ secrets.POLARIS_ACCESS_TOKEN }}
       BRIDGE_POLARIS_ACCESSTOKEN: ${{ secrets.POLARIS_ACCESS_TOKEN }}
       WEBGOAT_URL: http://127.0.0.1:8080/WebGoat/login
       TUNNEL_KEEPALIVE_SECONDS: 3600
@@ -25,6 +26,31 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.POLARIS_SERVER_URL }}" ]; then
+            echo "❌ POLARIS_SERVER_URL secret is missing"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.POLARIS_ACCESS_TOKEN }}" ]; then
+            echo "❌ POLARIS_ACCESS_TOKEN secret is missing"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.POLARIS_APP_NAME }}" ]; then
+            echo "❌ POLARIS_APP_NAME secret is missing"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.POLARIS_PROJECT_NAME }}" ]; then
+            echo "❌ POLARIS_PROJECT_NAME secret is missing"
+            exit 1
+          fi
+
+          echo "✅ Required secrets are present"
 
       - name: Start WebGoat
         shell: bash
@@ -64,6 +90,7 @@ jobs:
 
           bridge-cli --stage polaris-secure-tunnel \
             polaris.serverUrl="${{ secrets.POLARIS_SERVER_URL }}" \
+            polaris.accessToken="${{ secrets.POLARIS_ACCESS_TOKEN }}" \
             polaris.application.name="${{ secrets.POLARIS_APP_NAME }}" \
             polaris.project.name="${{ secrets.POLARIS_PROJECT_NAME }}" \
             > secure-tunnel.log 2>&1 &
@@ -79,6 +106,13 @@ jobs:
           echo "Secure Tunnel startup log:"
           cat secure-tunnel.log || true
 
+          if grep -q "ERROR" secure-tunnel.log; then
+            echo "❌ Secure Tunnel startup contains errors"
+            exit 1
+          fi
+
+          echo "✅ Secure Tunnel startup step completed"
+
       - name: Trigger Polaris DAST scan
         shell: bash
         run: |
@@ -88,6 +122,7 @@ jobs:
 
           bridge-cli --stage polaris \
             polaris.serverUrl="${{ secrets.POLARIS_SERVER_URL }}" \
+            polaris.accessToken="${{ secrets.POLARIS_ACCESS_TOKEN }}" \
             polaris.assessment.types="DAST" \
             polaris.application.name="${{ secrets.POLARIS_APP_NAME }}" \
             polaris.project.name="${{ secrets.POLARIS_PROJECT_NAME }}" \
