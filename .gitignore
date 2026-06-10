@@ -1,0 +1,12 @@
+# Local GitHub Actions runner - never commit this
+actions-runner/
+actions-runner-webgoat/
+
+# Logs / generated files
+*.log
+secure-tunnel.log
+secure-tunnel.pid
+bridge-output.log
+
+# OS files
+.DS_Store
