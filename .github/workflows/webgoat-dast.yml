@@ -6,175 +6,156 @@ on:
       - main
 
   workflow_dispatch:
+    inputs:
+      tunnel_keepalive_seconds:
+        description: "How long to keep secure tunnel alive for Polaris DAST scan"
+        required: true
+        default: "600"
+        type: string
 
-concurrency:
-  group: webgoat-dast-${{ github.ref }}
-  cancel-in-progress: false
+      post_scan_sleep_seconds:
+        description: "Sleep after scan/tunnel window before cleanup"
+        required: true
+        default: "60"
+        type: string
 
 jobs:
   webgoat-dast:
-    name: Run WebGoat and trigger Polaris DAST
     runs-on: self-hosted
-    timeout-minutes: 75
+    timeout-minutes: 20
 
     env:
       POLARIS_SERVER_URL: ${{ secrets.POLARIS_SERVER_URL }}
       POLARIS_ACCESS_TOKEN: ${{ secrets.POLARIS_ACCESS_TOKEN }}
-      POLARIS_APP_NAME: ${{ secrets.POLARIS_APP_NAME }}
-      POLARIS_PROJECT_NAME: ${{ secrets.POLARIS_PROJECT_NAME }}
-      BRIDGE_POLARIS_ACCESSTOKEN: ${{ secrets.POLARIS_ACCESS_TOKEN }}
+
+      POLARIS_APPLICATION_NAME: shivam_dast_tunnel
+      POLARIS_PROJECT_NAME: webgoat
       WEBGOAT_URL: http://127.0.0.1:8080/WebGoat/login
-      TUNNEL_KEEPALIVE_SECONDS: 3600
+
+      TUNNEL_KEEPALIVE_SECONDS: ${{ inputs.tunnel_keepalive_seconds || '600' }}
+      POST_SCAN_SLEEP_SECONDS: ${{ inputs.post_scan_sleep_seconds || '60' }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Validate required secrets
         shell: bash
         run: |
-          if [ -z "${POLARIS_SERVER_URL}" ]; then
+          set -e
+
+          if [ -z "$POLARIS_SERVER_URL" ]; then
             echo "❌ POLARIS_SERVER_URL secret is missing"
             exit 1
           fi
 
-          if [ -z "${POLARIS_ACCESS_TOKEN}" ]; then
+          if [ -z "$POLARIS_ACCESS_TOKEN" ]; then
             echo "❌ POLARIS_ACCESS_TOKEN secret is missing"
             exit 1
           fi
 
-          if [ -z "${POLARIS_APP_NAME}" ]; then
-            echo "❌ POLARIS_APP_NAME secret is missing"
-            exit 1
-          fi
+          echo "✅ Polaris secrets are available"
 
-          if [ -z "${POLARIS_PROJECT_NAME}" ]; then
-            echo "❌ POLARIS_PROJECT_NAME secret is missing"
-            exit 1
-          fi
-
-          echo "✅ Required secrets are present"
-
-      - name: Start WebGoat
+      - name: Start WebGoat locally
         shell: bash
         run: |
-          echo "Starting WebGoat for DAST demo..."
-          ./scripts/start-webgoat.sh
+          set -e
 
-      - name: Verify WebGoat is running
+          docker rm -f webgoat-dast-demo || true
+
+          docker run -d \
+            --name webgoat-dast-demo \
+            -p 127.0.0.1:8080:8080 \
+            -p 127.0.0.1:9090:9090 \
+            webgoat/webgoat
+
+          echo "✅ WebGoat started"
+
+      - name: Wait for WebGoat
         shell: bash
         run: |
-          echo "Checking WebGoat endpoint: ${WEBGOAT_URL}"
+          set -e
 
-          for i in $(seq 1 60); do
-            if curl -fsS "${WEBGOAT_URL}" > /dev/null 2>&1; then
-              echo "✅ WebGoat is reachable!"
+          for i in {1..60}; do
+            if curl -sSf "$WEBGOAT_URL" > /dev/null; then
+              echo "✅ WebGoat is reachable"
               exit 0
             fi
 
-            echo "⏳ Waiting for WebGoat... attempt $i/60"
+            echo "Waiting for WebGoat..."
             sleep 5
           done
 
-          echo "❌ WebGoat is not reachable."
-          echo "Container logs:"
-          docker logs webgoat || true
+          echo "❌ WebGoat did not become reachable"
+          docker logs webgoat-dast-demo --tail 100
           exit 1
 
-      - name: Verify Bridge CLI
+      - name: Start Polaris Secure Tunnel
         shell: bash
         run: |
-          bridge-cli --version
+          set -e
 
-      - name: Start Polaris Secure Tunnel in background
-        shell: bash
-        run: |
-          echo "Starting Polaris Secure Tunnel in background..."
+          BRIDGE_CLI="$HOME/Desktop/bridge-cli-bundle-4.2-2.1-macos_arm/bridge-cli"
 
-          bridge-cli --stage polaris-secure-tunnel \
-            polaris.serverUrl="${POLARIS_SERVER_URL}" \
-            polaris.accessToken="${POLARIS_ACCESS_TOKEN}" \
-            polaris.application.name="${POLARIS_APP_NAME}" \
-            polaris.project.name="${POLARIS_PROJECT_NAME}" \
-            > secure-tunnel.log 2>&1 &
-
-          echo $! > secure-tunnel.pid
-
-          echo "Secure Tunnel PID:"
-          cat secure-tunnel.pid
-
-          echo "Giving Secure Tunnel time to initialise..."
-          sleep 30
-
-          echo "Secure Tunnel startup log:"
-          cat secure-tunnel.log || true
-
-          if grep -q "ERROR" secure-tunnel.log; then
-            echo "❌ Secure Tunnel startup contains errors"
+          if [ ! -f "$BRIDGE_CLI" ]; then
+            echo "❌ bridge-cli not found at: $BRIDGE_CLI"
             exit 1
           fi
 
-          echo "✅ Secure Tunnel startup step completed"
+          chmod +x "$BRIDGE_CLI"
 
-      - name: Trigger Polaris DAST scan
-        shell: bash
-        run: |
-          set +e
+          "$BRIDGE_CLI" \
+            --stage polaris-secure-tunnel \
+            polaris.application.name="$POLARIS_APPLICATION_NAME" \
+            polaris.project.name="$POLARIS_PROJECT_NAME" \
+            polaris.serverUrl="$POLARIS_SERVER_URL" \
+            polaris.accessToken="$POLARIS_ACCESS_TOKEN" \
+            --diagnostics &
 
-          echo "Triggering Polaris DAST scan for WebGoat..."
+          echo $! > bridge-tunnel.pid
 
-          bridge-cli --stage polaris \
-            polaris.serverUrl="${POLARIS_SERVER_URL}" \
-            polaris.accessToken="${POLARIS_ACCESS_TOKEN}" \
-            polaris.assessment.types="DAST" \
-            polaris.application.name="${POLARIS_APP_NAME}" \
-            polaris.project.name="${POLARIS_PROJECT_NAME}" \
-            polaris.waitForScan=false 2>&1 | tee bridge-output.log
+          echo "✅ Tunnel started with PID $(cat bridge-tunnel.pid)"
+          sleep 30
 
-          BRIDGE_EXIT_CODE=${PIPESTATUS[0]}
-
-          echo "Bridge CLI exit code: ${BRIDGE_EXIT_CODE}"
-
-          if grep -q "Successfully created test" bridge-output.log; then
-            echo "✅ Polaris DAST scan was successfully triggered."
-            exit 0
+          if ! ps -p "$(cat bridge-tunnel.pid)" > /dev/null; then
+            echo "❌ Secure tunnel process is not running"
+            exit 1
           fi
 
-          echo "❌ Polaris DAST scan was not confirmed as created."
-          echo "Bridge CLI output did not contain: Successfully created test"
-          exit ${BRIDGE_EXIT_CODE}
+          echo "✅ Secure tunnel is running"
 
-      - name: Keep Secure Tunnel alive while scan runs
+      - name: Keep Secure Tunnel alive for Polaris DAST scan
         shell: bash
         run: |
           echo "Keeping Secure Tunnel alive for Polaris DAST scan..."
-          echo "Tunnel keepalive seconds: ${TUNNEL_KEEPALIVE_SECONDS}"
-          sleep "${TUNNEL_KEEPALIVE_SECONDS}"
+          echo "Tunnel keepalive seconds: $TUNNEL_KEEPALIVE_SECONDS"
 
-      - name: Stop Secure Tunnel
+          sleep "$TUNNEL_KEEPALIVE_SECONDS"
+
+          echo "Tunnel keepalive completed"
+
+      - name: Sleep after scan window
+        if: success()
+        shell: bash
+        run: |
+          echo "Sleeping after scan/tunnel window..."
+          echo "Post scan sleep seconds: $POST_SCAN_SLEEP_SECONDS"
+
+          sleep "$POST_SCAN_SLEEP_SECONDS"
+
+          echo "Post-scan sleep completed"
+
+      - name: Cleanup
         if: always()
         shell: bash
         run: |
-          echo "Stopping Secure Tunnel if still running..."
+          echo "Cleaning up..."
 
-          if [ -f secure-tunnel.pid ]; then
-            TUNNEL_PID=$(cat secure-tunnel.pid)
-            echo "Stopping Secure Tunnel PID: ${TUNNEL_PID}"
-            kill "${TUNNEL_PID}" || true
+          if [ -f bridge-tunnel.pid ]; then
+            kill "$(cat bridge-tunnel.pid)" || true
+            rm -f bridge-tunnel.pid
           fi
 
-          echo "Final Secure Tunnel log:"
-          cat secure-tunnel.log || true
+          docker rm -f webgoat-dast-demo || true
 
-      - name: Show WebGoat logs
-        if: always()
-        shell: bash
-        run: |
-          echo "Final WebGoat logs:"
-          docker logs webgoat || true
-
-      - name: Print final message
-        shell: bash
-        run: |
-          echo "✅ GitHub Actions workflow completed."
-          echo "👉 Check Polaris UI for DAST scan progress, crawl report, and findings."
+          echo "✅ Cleanup completed"
