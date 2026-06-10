@@ -18,7 +18,10 @@ jobs:
     timeout-minutes: 75
 
     env:
+      POLARIS_SERVER_URL: ${{ secrets.POLARIS_SERVER_URL }}
       POLARIS_ACCESS_TOKEN: ${{ secrets.POLARIS_ACCESS_TOKEN }}
+      POLARIS_APP_NAME: ${{ secrets.POLARIS_APP_NAME }}
+      POLARIS_PROJECT_NAME: ${{ secrets.POLARIS_PROJECT_NAME }}
       BRIDGE_POLARIS_ACCESSTOKEN: ${{ secrets.POLARIS_ACCESS_TOKEN }}
       WEBGOAT_URL: http://127.0.0.1:8080/WebGoat/login
       TUNNEL_KEEPALIVE_SECONDS: 3600
@@ -30,22 +33,22 @@ jobs:
       - name: Validate required secrets
         shell: bash
         run: |
-          if [ -z "${{ secrets.POLARIS_SERVER_URL }}" ]; then
+          if [ -z "${POLARIS_SERVER_URL}" ]; then
             echo "❌ POLARIS_SERVER_URL secret is missing"
             exit 1
           fi
 
-          if [ -z "${{ secrets.POLARIS_ACCESS_TOKEN }}" ]; then
+          if [ -z "${POLARIS_ACCESS_TOKEN}" ]; then
             echo "❌ POLARIS_ACCESS_TOKEN secret is missing"
             exit 1
           fi
 
-          if [ -z "${{ secrets.POLARIS_APP_NAME }}" ]; then
+          if [ -z "${POLARIS_APP_NAME}" ]; then
             echo "❌ POLARIS_APP_NAME secret is missing"
             exit 1
           fi
 
-          if [ -z "${{ secrets.POLARIS_PROJECT_NAME }}" ]; then
+          if [ -z "${POLARIS_PROJECT_NAME}" ]; then
             echo "❌ POLARIS_PROJECT_NAME secret is missing"
             exit 1
           fi
@@ -89,10 +92,10 @@ jobs:
           echo "Starting Polaris Secure Tunnel in background..."
 
           bridge-cli --stage polaris-secure-tunnel \
-            polaris.serverUrl="${{ secrets.POLARIS_SERVER_URL }}" \
-            polaris.accessToken="${{ secrets.POLARIS_ACCESS_TOKEN }}" \
-            polaris.application.name="${{ secrets.POLARIS_APP_NAME }}" \
-            polaris.project.name="${{ secrets.POLARIS_PROJECT_NAME }}" \
+            polaris.serverUrl="${POLARIS_SERVER_URL}" \
+            polaris.accessToken="${POLARIS_ACCESS_TOKEN}" \
+            polaris.application.name="${POLARIS_APP_NAME}" \
+            polaris.project.name="${POLARIS_PROJECT_NAME}" \
             > secure-tunnel.log 2>&1 &
 
           echo $! > secure-tunnel.pid
@@ -121,11 +124,11 @@ jobs:
           echo "Triggering Polaris DAST scan for WebGoat..."
 
           bridge-cli --stage polaris \
-            polaris.serverUrl="${{ secrets.POLARIS_SERVER_URL }}" \
-            polaris.accessToken="${{ secrets.POLARIS_ACCESS_TOKEN }}" \
+            polaris.serverUrl="${POLARIS_SERVER_URL}" \
+            polaris.accessToken="${POLARIS_ACCESS_TOKEN}" \
             polaris.assessment.types="DAST" \
-            polaris.application.name="${{ secrets.POLARIS_APP_NAME }}" \
-            polaris.project.name="${{ secrets.POLARIS_PROJECT_NAME }}" \
+            polaris.application.name="${POLARIS_APP_NAME}" \
+            polaris.project.name="${POLARIS_PROJECT_NAME}" \
             polaris.waitForScan=false 2>&1 | tee bridge-output.log
 
           BRIDGE_EXIT_CODE=${PIPESTATUS[0]}
