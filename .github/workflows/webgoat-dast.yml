@@ -27,6 +27,12 @@ jobs:
         run: |
           set -e
 
+          cleanup() {
+            [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
+            docker rm -f webgoat-dast-demo 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
           docker rm -f webgoat-dast-demo 2>/dev/null || true
           lsof -ti tcp:8080 | xargs kill -9 2>/dev/null || true
 
@@ -51,12 +57,25 @@ jobs:
             polaris.application.name="$POLARIS_APPLICATION_NAME" \
             polaris.project.name="$POLARIS_PROJECT_NAME" \
             polaris.accessToken="$POLARIS_ACCESS_TOKEN" \
-            --diagnostics &
+            --diagnostics > bridge-tunnel.log 2>&1 &
 
           TUNNEL_PID=$!
-          echo "Tunnel started. Keeping alive for $KEEPALIVE seconds..."
+          echo "Bridge tunnel process started with PID: $TUNNEL_PID"
 
+          sleep 35
+
+          if ! ps -p "$TUNNEL_PID" >/dev/null; then
+            echo "Bridge tunnel failed. Last logs:"
+            tail -80 bridge-tunnel.log || true
+            exit 1
+          fi
+
+          echo "Bridge tunnel is running."
+          echo "Last Bridge logs:"
+          tail -40 bridge-tunnel.log || true
+
+          echo "Now trigger Polaris DAST scan if using manual UI trigger."
+          echo "Keeping tunnel alive for $KEEPALIVE seconds..."
           sleep "$KEEPALIVE"
 
-          kill "$TUNNEL_PID" 2>/dev/null || true
-          docker rm -f webgoat-dast-demo 2>/dev/null || true
+          echo "Keepalive finished. Cleaning up."
