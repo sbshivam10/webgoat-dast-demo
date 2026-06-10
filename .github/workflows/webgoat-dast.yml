@@ -11,11 +11,12 @@ jobs:
     timeout-minutes: 20
 
     env:
-      POLARIS_SERVER_URL: ${{ secrets.POLARIS_SERVER_URL }}
+      POLARIS_SERVER_URL: https://poc.polaris.blackduck.com
       POLARIS_ACCESS_TOKEN: ${{ secrets.POLARIS_ACCESS_TOKEN }}
       POLARIS_APPLICATION_NAME: shivam_dast_tunnel
       POLARIS_PROJECT_NAME: webgoat
       WEBGOAT_URL: http://127.0.0.1:8080/WebGoat/login
+      BRIDGE_CLI: /Users/sbhardwaj/Downloads/bridge-cli-bundle-4.2-2.1-macos_arm/bridge-cli
       KEEPALIVE: 600
 
     steps:
@@ -35,24 +36,26 @@ jobs:
             webgoat/webgoat
 
           for i in {1..60}; do
-            curl -sSf "$WEBGOAT_URL" >/dev/null && echo "WebGoat is reachable" && break
+            if curl -sSf "$WEBGOAT_URL" >/dev/null; then
+              echo "WebGoat is reachable"
+              break
+            fi
             echo "Waiting for WebGoat..."
             sleep 5
           done
 
-          BRIDGE_CLI=$(find "$HOME" -name bridge-cli -type f 2>/dev/null | head -1)
-          echo "Using Bridge CLI: $BRIDGE_CLI"
           chmod +x "$BRIDGE_CLI"
 
           "$BRIDGE_CLI" --stage polaris-secure-tunnel \
+            polaris.serverUrl="$POLARIS_SERVER_URL" \
             polaris.application.name="$POLARIS_APPLICATION_NAME" \
             polaris.project.name="$POLARIS_PROJECT_NAME" \
-            polaris.serverUrl="$POLARIS_SERVER_URL" \
             polaris.accessToken="$POLARIS_ACCESS_TOKEN" \
             --diagnostics &
 
           TUNNEL_PID=$!
           echo "Tunnel started. Keeping alive for $KEEPALIVE seconds..."
+
           sleep "$KEEPALIVE"
 
           kill "$TUNNEL_PID" 2>/dev/null || true
