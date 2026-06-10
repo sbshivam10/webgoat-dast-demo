@@ -2,16 +2,8 @@ name: WebGoat DAST via Bridge Teleport
 
 on:
   push:
-    branches:
-      - main
-
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      tunnel_keepalive_seconds:
-        description: "Tunnel keepalive seconds"
-        required: true
-        default: "600"
-        type: string
 
 jobs:
   webgoat-dast:
@@ -24,87 +16,44 @@ jobs:
       POLARIS_APPLICATION_NAME: shivam_dast_tunnel
       POLARIS_PROJECT_NAME: webgoat
       WEBGOAT_URL: http://127.0.0.1:8080/WebGoat/login
-      TUNNEL_KEEPALIVE_SECONDS: ${{ inputs.tunnel_keepalive_seconds || '600' }}
-      BRIDGE_CLI: /Users/sbhardwaj/Desktop/bridge-cli-bundle-4.2-2.1-macos_arm/bridge-cli
+      KEEPALIVE: 600
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Free port 8080 and cleanup old containers
+      - name: Start WebGoat and Bridge tunnel
         shell: bash
         run: |
-          docker rm -f webgoat-dast-demo || true
-          docker ps -q --filter "publish=8080" | xargs -r docker rm -f || true
+          set -e
 
-          PORT_PID=$(lsof -ti tcp:8080 || true)
-          if [ -n "$PORT_PID" ]; then
-            echo "Port 8080 is used by PID $PORT_PID. Killing it for demo cleanup."
-            kill -9 $PORT_PID || true
-          fi
+          docker rm -f webgoat-dast-demo 2>/dev/null || true
+          lsof -ti tcp:8080 | xargs kill -9 2>/dev/null || true
 
-      - name: Start WebGoat
-        shell: bash
-        run: |
-          docker run -d \
-            --name webgoat-dast-demo \
+          docker run -d --name webgoat-dast-demo \
             -p 127.0.0.1:8080:8080 \
             -p 127.0.0.1:9090:9090 \
             webgoat/webgoat
 
-      - name: Wait for WebGoat
-        shell: bash
-        run: |
           for i in {1..60}; do
-            if curl -sSf "$WEBGOAT_URL" > /dev/null; then
-              echo "WebGoat is reachable"
-              exit 0
-            fi
+            curl -sSf "$WEBGOAT_URL" >/dev/null && echo "WebGoat is reachable" && break
             echo "Waiting for WebGoat..."
             sleep 5
           done
 
-          echo "WebGoat did not start"
-          docker logs webgoat-dast-demo --tail 100 || true
-          exit 1
-
-      - name: Start Polaris Secure Tunnel
-        shell: bash
-        run: |
+          BRIDGE_CLI=$(find "$HOME" -name bridge-cli -type f 2>/dev/null | head -1)
+          echo "Using Bridge CLI: $BRIDGE_CLI"
           chmod +x "$BRIDGE_CLI"
 
-          "$BRIDGE_CLI" \
-            --stage polaris-secure-tunnel \
+          "$BRIDGE_CLI" --stage polaris-secure-tunnel \
             polaris.application.name="$POLARIS_APPLICATION_NAME" \
             polaris.project.name="$POLARIS_PROJECT_NAME" \
             polaris.serverUrl="$POLARIS_SERVER_URL" \
             polaris.accessToken="$POLARIS_ACCESS_TOKEN" \
             --diagnostics &
 
-          echo $! > bridge-tunnel.pid
-          sleep 30
+          TUNNEL_PID=$!
+          echo "Tunnel started. Keeping alive for $KEEPALIVE seconds..."
+          sleep "$KEEPALIVE"
 
-      - name: Keep tunnel alive for Polaris scan
-        shell: bash
-        run: |
-          echo "Keeping tunnel alive for $TUNNEL_KEEPALIVE_SECONDS seconds"
-          sleep "$TUNNEL_KEEPALIVE_SECONDS"
-          echo "Tunnel keepalive completed"
-
-      - name: Sleep after scan window
-        shell: bash
-        run: |
-          echo "Sleeping after scan window..."
-          sleep 60
-          echo "Done"
-
-      - name: Cleanup
-        if: always()
-        shell: bash
-        run: |
-          if [ -f bridge-tunnel.pid ]; then
-            kill "$(cat bridge-tunnel.pid)" || true
-            rm -f bridge-tunnel.pid
-          fi
-
-          docker rm -f webgoat-dast-demo || true
+          kill "$TUNNEL_PID" 2>/dev/null || true
+          docker rm -f webgoat-dast-demo 2>/dev/null || true
