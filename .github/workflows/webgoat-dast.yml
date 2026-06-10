@@ -129,7 +129,7 @@ jobs:
             polaris.assessment.types="DAST" \
             polaris.application.name="${POLARIS_APP_NAME}" \
             polaris.project.name="${POLARIS_PROJECT_NAME}" \
-            polaris.waitForScan=false 2>&1 | tee bridge-output.log
+            polaris.waitForScan=true 2>&1 | tee bridge-output.log
 
           BRIDGE_EXIT_CODE=${PIPESTATUS[0]}
 
@@ -149,7 +149,7 @@ jobs:
         run: |
           echo "Keeping Secure Tunnel alive for Polaris DAST scan..."
           echo "Tunnel keepalive seconds: ${TUNNEL_KEEPALIVE_SECONDS}"
-          sleep "${TUNNEL_KEEPALIVE_SECONDS}"
+          sleep 30
 
       - name: Stop Secure Tunnel
         if: always()
